@@ -10,3 +10,4 @@ python-dotenv
 tavily-python
 sentence-transformers
 pypdf
+litellm>=1.52.0
