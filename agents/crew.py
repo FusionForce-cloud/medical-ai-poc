@@ -1,5 +1,3 @@
-from crewai import LLM
-llm = LLM(model="groq/llama-3.1-70b-versatile")
 import os
 from dotenv import load_dotenv
 from crewai import Agent, Task, Crew, LLM
@@ -13,12 +11,14 @@ from tools.web_search_tool import web_search
 
 load_dotenv()
 
-# --- LLM: Groq through CrewAI's LLM wrapper ---
-# Make sure GROQ_API_KEY is set in your .env
-llm = LLM(model="groq/llama-3.3-70b-versatile")
+# --- LLM: Groq through CrewAI's LiteLLM wrapper ---
+llm = LLM(
+    model="groq/llama-3.3-70b-versatile",
+    temperature=0.3,
+    max_tokens=2048,
+)
 
 # --- Tools ---
-
 @tool("PatientReportTool")
 def patient_report_tool(patient_name: str):
     """Retrieve patient discharge report by name."""
@@ -30,17 +30,15 @@ def web_search_tool(query: str):
     return web_search(query)
 
 # --- RAG retriever over nephrology PDF ---
-
 embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 vectordb = Chroma(persist_directory="chroma_db", embedding_function=embeddings)
 retriever = vectordb.as_retriever()
 
 # --- Agents ---
-
 receptionist = Agent(
     role="Receptionist Agent",
     goal="Identify the patient and retrieve discharge summary.",
-    backstory="You are a friendly hospital receptionist assisting patients after discharge.",
+    backstory="You are a friendly hospital receptionist assisting discharged nephrology patients.",
     tools=[patient_report_tool],
     llm=llm,
     verbose=True,
@@ -48,40 +46,37 @@ receptionist = Agent(
 
 clinical = Agent(
     role="Clinical Nephrology Agent",
-    goal="Provide nephrology guidance using RAG and web search fallback.",
-    backstory="You are an expert AI nephrologist helping discharged patients understand their condition.",
+    goal="Provide nephrology guidance using RAG first, with web search fallback.",
+    backstory="You are an AI nephrologist helping patients understand their kidney recovery.",
     tools=[web_search_tool],
     llm=llm,
     verbose=True,
 )
 
-# --- Main routing function used by Streamlit ---
-
+# --- Main routing logic for Streamlit ---
 def run_multi_agent_turn(user_input: str, session_state):
-    """
-    Route user message either to Receptionist or Clinical agent
-    and handle persistent patient name recognition.
-    """
-    # 1️⃣ Detect and store patient name (only once)
+    """Routes user message to the correct agent and tracks patient identity."""
+
+    # 1️⃣ Store patient name once
     if session_state.patient_name is None:
         parts = user_input.strip().split()
-        if len(parts) >= 2 and all(x.isalpha() for x in parts):
+        if len(parts) >= 2 and all(x.isalpha() for x in parts):   # basic name check
             session_state.patient_name = user_input.strip()
 
-    # 2️⃣ If patient name is STILL unknown → receptionist must ask for name
+    # 2️⃣ If name still unknown → receptionist must ask for it
     if session_state.patient_name is None:
         task = Task(
             description=(
                 f"User said: {user_input}. You do NOT know their name yet.\n"
-                "Ask politely for the patient's full name. Do NOT answer medical questions until name is known."
+                "Ask for their full name and do NOT answer medical questions until the name is known."
             ),
             agent=receptionist,
-            expected_output="Ask for patient's name only."
+            expected_output="Ask politely for patient's full name only."
         )
         crew = Crew(agents=[receptionist], tasks=[task], llm=llm, verbose=True)
         return crew.kickoff()
 
-    # 3️⃣ If the name is known → route medical vs. non-medical messages
+    # 3️⃣ Determine if the message is medical or general
     text = user_input.lower()
     medical_keywords = [
         "pain", "swelling", "medication", "tablet", "dose",
@@ -94,28 +89,28 @@ def run_multi_agent_turn(user_input: str, session_state):
     ]
 
     if any(k in text for k in medical_keywords):
-        # → route to Clinical Nephrology Agent
+        # 👨‍⚕️ Clinical agent
         task = Task(
             description=(
                 f"Message from patient {session_state.patient_name}: {user_input}\n"
-                "First use the RAG nephrology knowledge base (retriever). "
-                "If insufficient, use WebSearchTool. Explain clearly and add [PDF Source] if PDF was used."
+                "Use nephrology PDF (RAG) first via retriever. If insufficient, use WebSearchTool.\n"
+                "Add [PDF Source] when PDF was used."
             ),
             agent=clinical,
-            expected_output="Clear nephrology advice with citations."
+            expected_output="Clear safe nephrology advice with citations."
         )
     else:
-        # → route to Receptionist
+        # 👩‍💼 Receptionist
         task = Task(
             description=(
                 f"Message from patient {session_state.patient_name}: {user_input}\n"
-                "Retrieve discharge summary and respond warmly with helpful follow-up questions."
+                "Retrieve discharge summary and reply warmly with follow-up questions."
             ),
             agent=receptionist,
-            expected_output="Friendly, supportive response."
+            expected_output="Friendly, helpful response."
         )
 
-    # 4️⃣ Run the selected agent
+    # 4️⃣ Execute task
     crew = Crew(
         agents=[receptionist, clinical],
         tasks=[task],
