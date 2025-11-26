@@ -25,6 +25,8 @@ This ensures **safety + relevance** of medical responses.
 
 ---
 
+## **Model is live at:** https://medical-ai-poc-2tn394peysr948zpkwbdcv.streamlit.app/
+
 ## 🖥️ **User Interface**
 To launch the chat interface locally:
 
